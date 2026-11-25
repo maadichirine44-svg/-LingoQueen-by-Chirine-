@@ -1,0 +1,6 @@
+{
+  "name": "LingoQueen by Chirine",
+  "description": "Royal multilingual learning academy with 300 lessons across 6 languages, Hotel Hospitality track, AI tutor Luna, level evaluations, and offline PWA support.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
