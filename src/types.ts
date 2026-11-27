@@ -4,6 +4,10 @@ export type UILanguage = 'en' | 'ar';
 
 export type CEFRLevel = 'A1' | 'A2' | 'B1' | 'B2' | 'C1-C2';
 
+export type PlacementCEFR = 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
+
+export type LegalPageId = 'about' | 'privacy' | 'contact' | 'terms';
+
 export interface LanguageMeta {
   id: LanguageId;
   name: string;
@@ -143,15 +147,18 @@ export interface LanguageProgress {
   unlockedTier: number; // 1 (1-10), 2 (11-20), 3 (21-30), 4 (31-40), 5 (41-50)
   finalExam?: FinalExamResult;
   xp: number;
+  placementLevel?: PlacementCEFR;
+  pathStartLesson?: number;
 }
 
 export interface HotelLesson {
-  id: number; // 1..40
+  id: number;
   category:
     | 'Check-in'
+    | 'Room Service'
+    | 'Breakfast'
     | 'Check-out'
     | 'Booking'
-    | 'Room Service'
     | 'Angry Customer'
     | 'Phone'
     | 'Email'
@@ -159,7 +166,9 @@ export interface HotelLesson {
     | 'CV Builder'
     | 'Job Interview';
   title: string;
+  titleAr?: string;
   scenario: string;
+  scenarioAr?: string;
   isCV?: boolean;
   isInterview?: boolean;
   phrases: Array<{ target: string; english: string; arabic: string }>;
@@ -169,6 +178,7 @@ export interface HotelLesson {
 
 export interface UserProfile {
   name: string;
+  photoDataUrl?: string;
   createdAt: string;
   streak: number;
   lastActiveDate: string;
@@ -183,4 +193,11 @@ export interface UserProfile {
     xp: number;
   };
   earnedBadges: string[];
+  completedStories?: string[];
+  gamesXp?: number;
+  gamesPlayed?: number;
+  placementCompleted?: boolean;
+  placementLanguage?: LanguageId;
+  placementLevel?: PlacementCEFR;
+  placementScore?: number;
 }

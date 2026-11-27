@@ -195,11 +195,11 @@ export const LunaTutorView: React.FC<LunaTutorViewProps> = ({
               </div>
 
               {m.hasCorrection && m.correctedSentence && (
-                <div className="mt-2 max-w-[85%] rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs space-y-1">
-                  <div className="font-bold text-amber-900">
-                    Grammar Correction
+                <div className="mt-2 max-w-[85%] rounded-xl border border-pink-200 bg-pink-50 p-3 text-xs space-y-1">
+                  <div className="font-bold text-pink-700">
+                    Luna’s Instant Correction
                   </div>
-                  <div className="text-slate-900 font-semibold">
+                  <div className="text-purple-950 font-semibold">
                     “{m.correctedSentence}”
                   </div>
                   {m.grammarNote && (

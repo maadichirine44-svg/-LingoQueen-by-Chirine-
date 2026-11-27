@@ -5,6 +5,7 @@ import {
   FinalExamResult,
   LanguageMeta,
   QuizQuestion,
+  UILanguage,
 } from '../types';
 import { getEvaluationBand } from '../utils/storage';
 import { launchRoyalConfetti } from '../utils/confetti';
@@ -14,6 +15,7 @@ interface ExamModalProps {
   checkpoint?: number; // 10, 20, 30, 40, 50
   language: LanguageMeta;
   questions: QuizQuestion[];
+  uiLang?: UILanguage;
   onCompleteEvaluation?: (result: EvaluationResult) => void;
   onCompleteFinal?: (result: FinalExamResult) => void;
   onOpenCertificate?: (result: FinalExamResult) => void;
@@ -25,11 +27,13 @@ export const ExamModal: React.FC<ExamModalProps> = ({
   checkpoint = 10,
   language,
   questions,
+  uiLang = 'en',
   onCompleteEvaluation,
   onCompleteFinal,
   onOpenCertificate,
   onClose,
 }) => {
+  const isAr = uiLang === 'ar';
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [submitted, setSubmitted] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(mode === 'final' ? 90 : 0);
@@ -114,14 +118,22 @@ export const ExamModal: React.FC<ExamModalProps> = ({
         <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-pink-100 bg-gradient-to-r from-pink-50 to-purple-50">
           <div>
             <p className="text-xs font-semibold text-pink-700">
-              {language.name} ({language.nativeName}) ·{' '}
+              {isAr ? language.arabicName : language.name} ({language.nativeName}) ·{' '}
               {mode === 'evaluation'
-                ? `Checkpoint Lessons ${checkpoint - 9}–${checkpoint}`
+                ? isAr
+                  ? `تقييم الدروس ${checkpoint - 9}–${checkpoint}`
+                  : `Checkpoint Lessons ${checkpoint - 9}–${checkpoint}`
+                : isAr
+                ? 'الامتحان النهائي الشامل (A1–C2)'
                 : 'Final Mastery Exam (A1–C2)'}
             </p>
             <h2 className="text-lg sm:text-xl font-bold text-purple-950">
               {mode === 'evaluation'
-                ? `Level Evaluation (${questions.length} Questions · /100)`
+                ? isAr
+                  ? `تقييم المستوى (${questions.length} أسئلة · /100)`
+                  : `Level Evaluation (${questions.length} Questions · /100)`
+                : isAr
+                ? `الامتحان النهائي (${questions.length} سؤالاً · 90 ثانية)`
                 : `Final Exam (${questions.length} Questions · 90 Seconds)`}
             </h2>
           </div>
@@ -156,11 +168,15 @@ export const ExamModal: React.FC<ExamModalProps> = ({
               <div className="flex items-center justify-between text-xs text-slate-500 border-b border-slate-100 pb-3">
                 <span>
                   {mode === 'evaluation'
-                    ? 'Score 60/100 or higher to unlock the next level tier.'
+                    ? isAr
+                      ? 'احصلي على 60/100 فأكثر لفتح المستوى التالي.'
+                      : 'Score 60/100 or higher to unlock the next level tier.'
+                    : isAr
+                    ? 'احصلي على 70% فأكثر خلال 90 ثانية لنيل +500 نقطة والوسام الذهبي والشهادة.'
                     : 'Score 70% or higher within 90 seconds to earn +500 XP, Golden Badge & Certificate.'}
                 </span>
                 <span className="font-semibold text-purple-900 tabular-nums">
-                  {answeredCount}/{questions.length} answered
+                  {answeredCount}/{questions.length} {isAr ? 'مجاب' : 'answered'}
                 </span>
               </div>
 
@@ -325,13 +341,13 @@ export const ExamModal: React.FC<ExamModalProps> = ({
                 onClick={onClose}
                 className="min-h-[44px] px-4 py-2 rounded-xl border border-slate-300 text-sm font-medium text-slate-700 hover:bg-white cursor-pointer"
               >
-                Cancel
+                {isAr ? 'إلغاء' : 'Cancel'}
               </button>
               <button
                 onClick={handleSubmit}
                 className="min-h-[44px] px-6 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 text-sm font-semibold text-white shadow-sm hover:opacity-95 cursor-pointer"
               >
-                Submit Exam
+                {isAr ? 'إرسال الإجابات' : 'Submit Exam'}
               </button>
             </>
           ) : (
@@ -341,13 +357,13 @@ export const ExamModal: React.FC<ExamModalProps> = ({
                 className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-pink-200 bg-white text-sm font-semibold text-purple-900 hover:bg-pink-50 cursor-pointer"
               >
                 <RotateCcw className="w-4 h-4" />
-                <span>Retake Exam</span>
+                <span>{isAr ? 'إعادة الاختبار' : 'Retake Exam'}</span>
               </button>
               <button
                 onClick={onClose}
                 className="min-h-[44px] px-6 py-2.5 rounded-xl bg-purple-900 text-sm font-semibold text-white hover:bg-purple-800 cursor-pointer"
               >
-                Done
+                {isAr ? 'تم' : 'Done'}
               </button>
             </>
           )}

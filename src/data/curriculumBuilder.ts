@@ -1,6 +1,7 @@
 import {
   CEFRLevel,
   Dialogue,
+  DialogueLine,
   LanguageId,
   Lesson,
   LessonExercise,
@@ -16,6 +17,13 @@ export type VocabTuple = [
   example: string
 ];
 
+export interface SectionSentence {
+  target: string;
+  phonetic: string;
+  english: string;
+  arabic: string;
+}
+
 export interface LessonBlueprint {
   id: number;
   title: string;
@@ -23,15 +31,34 @@ export interface LessonBlueprint {
   grammarTitle: string;
   grammarExplanation: string;
   grammarFormula: string;
-  sentenceTarget: string;
+  grammarExamples: [
+    { target: string; english: string; arabic: string },
+    { target: string; english: string; arabic: string }
+  ];
+  sentenceTarget: string; // Grammar sentence-building
   sentenceEnglish: string;
+  speaking: SectionSentence; // Step 3: Speaking (new words/sentence)
+  voice: SectionSentence; // Step 6: Listening / Voice Rec (new words/sentence)
   dialogue1Title: string;
   dialogue1Context: string;
+  dialogue1Lines: DialogueLine[]; // Natural conversation 1
   dialogue2Title: string;
   dialogue2Context: string;
-  speakers: [string, string, string, string]; // 2 fictional pairs
+  dialogue2Lines: DialogueLine[]; // Natural conversation 2
+  speakers: [string, string, string, string];
   writingPrompt: string;
+  writingReviewWords?: string[]; // max 3 review words
   speakingTip: string;
+  fillBlank: {
+    sentence: string; // new sentence with _____
+    answer: string;
+    english: string;
+    arabic: string;
+    distractors: [string, string, string];
+  };
+  matchPairs: Array<{ left: string; right: string }>; // 4 distinct items
+  exerciseSentenceTarget: string; // NEW sentence for Step 7 Sentence Building
+  exerciseSentenceEnglish: string;
   vocab: VocabTuple[]; // 10 unique items
 }
 
@@ -56,20 +83,7 @@ function deterministicShuffle<T>(arr: T[], seed: number): T[] {
 
 export function buildLessonsForLanguage(
   languageId: LanguageId,
-  blueprints: LessonBlueprint[],
-  templates: {
-    askHow: (w: string) => string;
-    answerUse: (w: string, ex: string) => string;
-    greetingA: string;
-    greetingAEn: string;
-    greetingAAr: string;
-    replyB: string;
-    replyBEn: string;
-    replyBAr: string;
-    closingA: string;
-    closingAEn: string;
-    closingAAr: string;
-  }
+  blueprints: LessonBlueprint[]
 ): Lesson[] {
   const allVocabPool = blueprints.flatMap((b) => b.vocab);
 
@@ -83,187 +97,183 @@ export function buildLessonsForLanguage(
       example,
     }));
 
-    const words = bp.sentenceTarget.split(/\s+/).filter(Boolean);
-    const scrambledWords =
-      words.length > 1
-        ? deterministicShuffle(words, bp.id * 97 + bpIdx)
+    // Step 2: Grammar Sentence Formation (distinct from grammarExamples & exercise3)
+    const grammarWords = bp.sentenceTarget.split(/\s+/).filter(Boolean);
+    const grammarScrambled =
+      grammarWords.length > 1
+        ? deterministicShuffle(grammarWords, bp.id * 97 + bpIdx)
         : Array.from(bp.sentenceTarget);
 
-    const v0 = vocab[0];
-    const v1 = vocab[1];
-    const v2 = vocab[2];
-    const v3 = vocab[3];
-    const v4 = vocab[4];
-    const v5 = vocab[5];
-
+    // Step 4: Two Natural Dialogues
     const dialogue1: Dialogue = {
       title: bp.dialogue1Title,
       context: bp.dialogue1Context,
-      lines: [
-        {
-          speaker: bp.speakers[0],
-          text: `${templates.greetingA} ${v0.example}`,
-          english: `${templates.greetingAEn} (${v0.english})`,
-          arabic: `${templates.greetingAAr} (${v0.arabic})`,
-        },
-        {
-          speaker: bp.speakers[1],
-          text: `${templates.replyB} ${v1.example}`,
-          english: `${templates.replyBEn} (${v1.english})`,
-          arabic: `${templates.replyBAr} (${v1.arabic})`,
-        },
-        {
-          speaker: bp.speakers[0],
-          text: templates.askHow(v2.word),
-          english: `Do we also need "${v2.english}" here?`,
-          arabic: `هل نحتاج أيضاً إلى "${v2.arabic}" هنا؟`,
-        },
-        {
-          speaker: bp.speakers[1],
-          text: `${templates.answerUse(v2.word, v3.example)} ${templates.closingA}`,
-          english: `Yes, especially "${v2.english}" and "${v3.english}". ${templates.closingAEn}`,
-          arabic: `نعم، خصوصاً "${v2.arabic}" و"${v3.arabic}". ${templates.closingAAr}`,
-        },
-      ],
+      lines: bp.dialogue1Lines,
     };
 
     const dialogue2: Dialogue = {
       title: bp.dialogue2Title,
       context: bp.dialogue2Context,
-      lines: [
-        {
-          speaker: bp.speakers[2],
-          text: v4.example,
-          english: `Focus phrase: ${v4.english}`,
-          arabic: `العبارة الأساسية: ${v4.arabic}`,
-        },
-        {
-          speaker: bp.speakers[3],
-          text: v5.example,
-          english: `Response: ${v5.english}`,
-          arabic: `الرد: ${v5.arabic}`,
-        },
-        {
-          speaker: bp.speakers[2],
-          text: bp.sentenceTarget,
-          english: bp.sentenceEnglish,
-          arabic: `تركيز القواعد: ${bp.grammarTitle}`,
-        },
-        {
-          speaker: bp.speakers[3],
-          text: `${templates.replyB} ${templates.closingA}`,
-          english: `${templates.replyBEn} ${templates.closingAEn}`,
-          arabic: `${templates.replyBAr} ${templates.closingAAr}`,
-        },
-      ],
+      lines: bp.dialogue2Lines,
     };
 
-    // 3 Interactive Exercises
-    const ex1Target = v0.example.includes(v0.word)
-      ? v0.example.replace(v0.word, '_____')
-      : `${v0.example} — [_____]`;
-    const distractorPool = allVocabPool.filter(
-      (item) => !bp.vocab.some((bv) => bv[0] === item[0])
-    );
-
-    const ex1Distractors = deterministicShuffle(distractorPool, bp.id * 31).slice(0, 3);
+    // Step 7: 3 Distinct Exercises
     const ex1Options = deterministicShuffle(
-      [v0.word, ...ex1Distractors.map((d) => d[0])],
-      bp.id * 17
+      [bp.fillBlank.answer, ...bp.fillBlank.distractors],
+      bp.id * 17 + 3
     );
 
     const exercise1: LessonExercise = {
       id: `${languageId}-${bp.id}-ex1`,
       type: 'fill-blank',
-      instruction: 'Choose the correct word to complete the sentence:',
-      prompt: `${ex1Target} (${v0.english} / ${v0.arabic})`,
+      instruction: 'Choose the best word to complete this new sentence:',
+      prompt: `${bp.fillBlank.sentence} (${bp.fillBlank.english} / ${bp.fillBlank.arabic})`,
       options: ex1Options,
-      answer: v0.word,
+      answer: bp.fillBlank.answer,
     };
 
     const exercise2: LessonExercise = {
       id: `${languageId}-${bp.id}-ex2`,
       type: 'match',
-      instruction: 'Match each target word with its Arabic meaning:',
-      prompt: 'Tap a word on the left, then its Arabic match on the right.',
-      pairs: [v1, v2, v3, v4].map((v) => ({ left: v.word, right: v.arabic })),
+      instruction: 'Match each expression with its Arabic meaning:',
+      prompt: 'Tap an expression on the left, then its Arabic match on the right.',
+      pairs: bp.matchPairs,
       answer: 'matched',
     };
+
+    const ex3Words = bp.exerciseSentenceTarget.split(/\s+/).filter(Boolean);
+    const ex3Scrambled =
+      ex3Words.length > 1
+        ? deterministicShuffle(ex3Words, bp.id * 131 + bpIdx + 7)
+        : Array.from(bp.exerciseSentenceTarget);
 
     const exercise3: LessonExercise = {
       id: `${languageId}-${bp.id}-ex3`,
       type: 'sentence-order',
-      instruction: 'Arrange the tiles to form the correct grammatical sentence:',
-      prompt: bp.sentenceEnglish,
-      tokens: scrambledWords,
-      answer: bp.sentenceTarget,
+      instruction: 'Build a brand-new sentence using the lesson vocabulary:',
+      prompt: bp.exerciseSentenceEnglish,
+      tokens: ex3Scrambled,
+      answer: bp.exerciseSentenceTarget,
     };
 
-    // 10 Unique Quiz Questions
+    // Step 8: 10 Varied Quiz Questions (different formats, no repetition)
+    const distractorPool = allVocabPool.filter(
+      (item) => !bp.vocab.some((bv) => bv[0] === item[0])
+    );
     const quiz: QuizQuestion[] = [];
-    // Q1-Q5: Target word -> English meaning
-    for (let i = 0; i < 5; i++) {
+
+    // Q1-Q2: Meaning in context
+    for (let i = 0; i < 2; i++) {
       const item = vocab[i];
-      const others = deterministicShuffle(
-        distractorPool,
-        bp.id * 101 + i * 13
-      ).slice(0, 3);
-      const rawOpts = [item.english, ...others.map((o) => o[2])];
-      const shuffledOpts = deterministicShuffle(rawOpts, bp.id * 19 + i);
+      const others = deterministicShuffle(distractorPool, bp.id * 101 + i * 13).slice(0, 3);
+      const opts = deterministicShuffle([item.english, ...others.map((o) => o[2])], bp.id * 19 + i);
       quiz.push({
         id: `${languageId}-${bp.id}-q${i + 1}`,
-        question: `What is the English meaning of "${item.word}" (${item.phonetic})?`,
-        options: shuffledOpts,
-        correctIndex: shuffledOpts.indexOf(item.english),
-        explanation: `"${item.word}" means "${item.english}" (${item.arabic}).`,
+        question: `In "${item.example}", what does "${item.word}" mean?`,
+        options: opts,
+        correctIndex: opts.indexOf(item.english),
+        explanation: `"${item.word}" (${item.phonetic}) means "${item.english}" (${item.arabic}).`,
       });
     }
 
-    // Q6-Q8: Arabic meaning -> Target word
-    for (let i = 5; i < 8; i++) {
+    // Q3-Q4: Choose natural expression for English prompt
+    for (let i = 2; i < 4; i++) {
+      const item = vocab[i];
+      const others = deterministicShuffle(
+        vocab.filter((v) => v.word !== item.word),
+        bp.id * 43 + i
+      ).slice(0, 3);
+      const opts = deterministicShuffle([item.word, ...others.map((o) => o.word)], bp.id * 23 + i);
+      quiz.push({
+        id: `${languageId}-${bp.id}-q${i + 1}`,
+        question: `How do you express "${item.english}"?`,
+        options: opts,
+        correctIndex: opts.indexOf(item.word),
+        explanation: `"${item.english}" is expressed as "${item.word}" (${item.arabic}).`,
+      });
+    }
+
+    // Q5-Q6: Arabic -> Target expression
+    for (let i = 4; i < 6; i++) {
       const item = vocab[i];
       const others = deterministicShuffle(
         vocab.filter((v) => v.word !== item.word),
         bp.id * 53 + i
       ).slice(0, 3);
-      const rawOpts = [item.word, ...others.map((o) => o.word)];
-      const shuffledOpts = deterministicShuffle(rawOpts, bp.id * 29 + i);
+      const opts = deterministicShuffle([item.word, ...others.map((o) => o.word)], bp.id * 29 + i);
       quiz.push({
         id: `${languageId}-${bp.id}-q${i + 1}`,
-        question: `Select the correct expression for "${item.arabic}" (${item.english}):`,
-        options: shuffledOpts,
-        correctIndex: shuffledOpts.indexOf(item.word),
-        explanation: `"${item.arabic}" translates to "${item.word}".`,
+        question: `Which expression matches "${item.arabic}"?`,
+        options: opts,
+        correctIndex: opts.indexOf(item.word),
+        explanation: `"${item.arabic}" translates to "${item.word}" (${item.english}).`,
       });
     }
 
-    // Q9: Grammar pattern question
-    const wrongSentences = [
-      `${vocab[8].word} ${vocab[9].word}`,
-      `${vocab[7].word} — ${vocab[6].word}`,
-      `${vocab[4].word} ${vocab[1].word}`,
-    ];
-    const q9Opts = deterministicShuffle([bp.sentenceTarget, ...wrongSentences], bp.id * 41);
+    // Q7: Distinct vocabulary recognition in a fresh context (no repetition with Exercise 1)
+    const item7 = vocab[7];
+    const q7Others = deterministicShuffle(distractorPool, bp.id * 79).slice(0, 3);
+    const q7Opts = deterministicShuffle(
+      [item7.english, ...q7Others.map((o) => o[2])],
+      bp.id * 31
+    );
     quiz.push({
-      id: `${languageId}-${bp.id}-q9`,
-      question: `Which sentence correctly applies "${bp.grammarTitle}" (${bp.grammarFormula})?`,
-      options: q9Opts,
-      correctIndex: q9Opts.indexOf(bp.sentenceTarget),
-      explanation: `Correct structure: "${bp.sentenceTarget}" (${bp.sentenceEnglish}).`,
+      id: `${languageId}-${bp.id}-q7`,
+      question: `In "${item7.example}", what does "${item7.word}" mean?`,
+      options: q7Opts,
+      correctIndex: q7Opts.indexOf(item7.english),
+      explanation: `"${item7.word}" (${item7.phonetic}) means "${item7.english}" (${item7.arabic}).`,
     });
 
-    // Q10: Dialogue / context comprehension
+    // Q8: Speaking phrase comprehension
+    const speakingOthers = deterministicShuffle(distractorPool, bp.id * 71).slice(0, 3);
+    const q8Opts = deterministicShuffle(
+      [bp.speaking.english, ...speakingOthers.map((o) => o[2])],
+      bp.id * 37
+    );
+    quiz.push({
+      id: `${languageId}-${bp.id}-q8`,
+      question: `What does "${bp.speaking.target}" mean in English?`,
+      options: q8Opts,
+      correctIndex: q8Opts.indexOf(bp.speaking.english),
+      explanation: `"${bp.speaking.target}" means "${bp.speaking.english}".`,
+    });
+
+    // Q9: Grammar structure check using grammarExamples[0] vs invalid forms
+    const q9Target = bp.grammarExamples[0].target;
+    const q9Wrongs = [
+      `${vocab[7].word} ${vocab[9].word} ${vocab[1].word}`,
+      `${vocab[8].word} — ${vocab[3].word}`,
+      `${vocab[5].word} ${vocab[2].word}`,
+    ];
+    const q9Opts = deterministicShuffle([q9Target, ...q9Wrongs], bp.id * 41);
+    quiz.push({
+      id: `${languageId}-${bp.id}-q9`,
+      question: `Which sentence correctly follows "${bp.grammarTitle}" (${bp.grammarFormula})?`,
+      options: q9Opts,
+      correctIndex: q9Opts.indexOf(q9Target),
+      explanation: `Correct example: "${q9Target}" (${bp.grammarExamples[0].english}).`,
+    });
+
+    // Q10: Listening/Voice sentence comprehension
+    const voiceOthers = deterministicShuffle(distractorPool, bp.id * 89).slice(0, 3);
     const q10Opts = deterministicShuffle(
-      [vocab[9].english, vocab[0].english, vocab[2].english, vocab[5].english],
+      [bp.voice.english, ...voiceOthers.map((o) => o[2])],
       bp.id * 67
     );
     quiz.push({
       id: `${languageId}-${bp.id}-q10`,
-      question: `In "${bp.title}", what does "${vocab[9].word}" mean in context?`,
+      question: `Choose the right meaning for "${bp.voice.target}":`,
       options: q10Opts,
-      correctIndex: q10Opts.indexOf(vocab[9].english),
-      explanation: `"${vocab[9].word}" means "${vocab[9].english}" (${vocab[9].arabic}).`,
+      correctIndex: q10Opts.indexOf(bp.voice.english),
+      explanation: `"${bp.voice.target}" means "${bp.voice.english}" (${bp.voice.arabic}).`,
     });
+
+    // Max 3 review words for writing prompt
+    const reviewWords =
+      bp.writingReviewWords && bp.writingReviewWords.length > 0
+        ? bp.writingReviewWords.slice(0, 3)
+        : [vocab[2].word, vocab[5].word, vocab[8].word];
 
     return {
       id: bp.id,
@@ -276,22 +286,19 @@ export function buildLessonsForLanguage(
         title: bp.grammarTitle,
         explanation: bp.grammarExplanation,
         formula: bp.grammarFormula,
-        examples: [
-          { target: v0.example, english: v0.english, arabic: v0.arabic },
-          { target: bp.sentenceTarget, english: bp.sentenceEnglish, arabic: bp.grammarTitle },
-        ],
+        examples: bp.grammarExamples,
         sentenceFormation: {
           prompt: `Build the ${level} sentence: "${bp.sentenceEnglish}"`,
           targetSentence: bp.sentenceTarget,
-          scrambledWords,
+          scrambledWords: grammarScrambled,
           english: bp.sentenceEnglish,
         },
       },
       speaking: {
-        phrase: bp.sentenceTarget,
-        phonetic: v0.phonetic,
-        english: bp.sentenceEnglish,
-        arabic: v0.arabic,
+        phrase: bp.speaking.target,
+        phonetic: bp.speaking.phonetic,
+        english: bp.speaking.english,
+        arabic: bp.speaking.arabic,
         tip: bp.speakingTip,
       },
       dialogues: [dialogue1, dialogue2],
@@ -299,13 +306,13 @@ export function buildLessonsForLanguage(
         prompt: bp.writingPrompt,
         minSentences: 5,
         maxSentences: 8,
-        suggestedWords: [v0.word, v1.word, v2.word, v3.word, v4.word],
+        suggestedWords: reviewWords,
       },
       voicePrompt: {
-        targetPhrase: bp.sentenceTarget,
-        phonetic: v0.phonetic,
-        english: bp.sentenceEnglish,
-        arabic: v0.arabic,
+        targetPhrase: bp.voice.target,
+        phonetic: bp.voice.phonetic,
+        english: bp.voice.english,
+        arabic: bp.voice.arabic,
       },
       exercises: [exercise1, exercise2, exercise3],
       quiz,

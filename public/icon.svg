@@ -1,22 +1,40 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fdf2f8" />
+      <stop offset="100%" stop-color="#f3e8ff" />
+    </linearGradient>
+    <linearGradient id="bubble" x1="15%" y1="20%" x2="85%" y2="85%">
       <stop offset="0%" stop-color="#ec4899" />
+      <stop offset="55%" stop-color="#a855f7" />
       <stop offset="100%" stop-color="#7e22ce" />
     </linearGradient>
-    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#fde047" />
-      <stop offset="100%" stop-color="#eab308" />
+    <linearGradient id="crown" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a" />
+      <stop offset="50%" stop-color="#facc15" />
+      <stop offset="100%" stop-color="#ca8a04" />
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)" />
-  <!-- Gold Crown -->
-  <path d="M168 156 L192 96 L256 134 L320 96 L344 156 Z" fill="url(#gold)" stroke="#fef08a" stroke-width="6" stroke-linejoin="round" />
-  <circle cx="192" cy="88" r="10" fill="#fef08a" />
-  <circle cx="256" cy="122" r="10" fill="#fef08a" />
-  <circle cx="320" cy="88" r="10" fill="#fef08a" />
-  <rect x="166" y="156" width="180" height="18" rx="9" fill="#ca8a04" />
-  <!-- Speech Bubble -->
-  <path d="M126 196 H386 C410 196 426 212 426 236 V346 C426 370 410 386 386 386 H232 L162 436 L176 386 H126 C102 386 86 370 86 346 V236 C86 212 102 196 126 196 Z" fill="#ffffff" />
-  <text x="256" y="314" text-anchor="middle" font-family="sans-serif" font-weight="800" font-size="84" fill="#9333ea">LQ</text>
+  <!-- Golden Crown -->
+  <path d="M168 128 L186 64 L228 100 L256 52 L284 100 L326 64 L344 128 Z" fill="url(#crown)" stroke="#a16207" stroke-width="6" stroke-linejoin="round" />
+  <rect x="164" y="128" width="184" height="18" rx="9" fill="#ca8a04" />
+  <circle cx="186" cy="58" r="9" fill="#fef08a" stroke="#ca8a04" stroke-width="3" />
+  <circle cx="256" cy="46" r="10" fill="#fef08a" stroke="#ca8a04" stroke-width="3" />
+  <circle cx="326" cy="58" r="9" fill="#fef08a" stroke="#ca8a04" stroke-width="3" />
+  <!-- Pink-Purple Speech Bubble -->
+  <path d="M106 156 H406 C434 156 456 178 456 206 V346 C456 374 434 396 406 396 H204 L132 454 L152 396 H106 C78 396 56 374 56 346 V206 C56 178 78 156 106 156 Z" fill="url(#bubble)" />
+  <!-- 6 Mini Landmark Circles Inside Bubble -->
+  <circle cx="152" cy="232" r="40" fill="#fdf2f8" stroke="#fbcfe8" stroke-width="4" />
+  <path d="M152 204 V212 M148 212 L142 234 L134 252 H144 C146 244 149 240 152 240 C155 240 158 244 160 252 H170 L162 234 L156 212 Z M142 234 H162" stroke="#7e22ce" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="256" cy="232" r="40" fill="#fdf2f8" stroke="#fbcfe8" stroke-width="4" />
+  <path d="M256 204 L249 218 H263 Z M246 218 H266 V236 H246 Z M248 236 V254 M264 236 V254 M240 254 H272" stroke="#7e22ce" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="360" cy="232" r="40" fill="#fdf2f8" stroke="#fbcfe8" stroke-width="4" />
+  <path d="M344 254 V224 L348 214 L352 224 V254 M356 254 V216 L360 206 L364 216 V254 M368 254 V224 L372 214 L376 224 V254 M338 254 H382" stroke="#db2777" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="152" cy="326" r="40" fill="#fdf2f8" stroke="#fbcfe8" stroke-width="4" />
+  <path d="M132 346 V318 C140 312 152 310 162 312 L168 320 H174 V346 H132 Z M132 328 H174 M132 337 H174" stroke="#7e22ce" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="256" cy="326" r="40" fill="#fdf2f8" stroke="#fbcfe8" stroke-width="4" />
+  <path d="M234 344 L248 328 L264 322 L278 310 M234 352 L250 336 L266 330 L278 320" stroke="#be185d" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="360" cy="326" r="40" fill="#fdf2f8" stroke="#fbcfe8" stroke-width="4" />
+  <path d="M360 306 L354 314 H366 Z M340 314 H380 V321 H340 Z M344 321 V346 M352 321 V346 M360 321 V346 M368 321 V346 M376 321 V346 M336 346 H384" stroke="#6d28d9" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round" />
 </svg>

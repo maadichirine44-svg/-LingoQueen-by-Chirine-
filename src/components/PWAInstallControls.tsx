@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Download, WifiOff, X } from 'lucide-react';
+import { Download, Smartphone, WifiOff, X } from 'lucide-react';
+import { UILanguage } from '../types';
+import { LingoQueenLogo } from './BrandArt';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -73,67 +75,115 @@ export function useOnlineStatus() {
   return isOnline;
 }
 
-export const PWAInstallButton: React.FC<{ label: string }> = ({ label }) => {
+export const PWAInstallButton: React.FC<{ label: string; uiLang?: UILanguage }> = ({
+  label,
+  uiLang = 'en',
+}) => {
+  const isAr = uiLang === 'ar';
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
-  const [showIOSGuide, setShowIOSGuide] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
 
   if (isInstalled) return null;
 
-  if (isInstallable) {
-    return (
+  const handleClick = async () => {
+    if (isInstallable) {
+      const ok = await install();
+      if (!ok) setShowGuide(true);
+    } else {
+      setShowGuide(true);
+    }
+  };
+
+  return (
+    <>
       <button
-        onClick={install}
-        className="min-h-[40px] inline-flex items-center gap-1.5 rounded-lg border border-pink-200 bg-pink-50 px-3 py-1.5 text-xs font-semibold text-pink-800 hover:bg-pink-100 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        type="button"
+        onClick={handleClick}
+        className="min-h-[44px] inline-flex items-center gap-2 rounded-xl border border-pink-300 bg-gradient-to-r from-pink-50 to-purple-50 px-3.5 py-2 text-xs font-bold text-purple-950 hover:from-pink-100 hover:to-purple-100 shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
       >
-        <Download className="w-3.5 h-3.5" />
+        <LingoQueenLogo size={24} compact />
         <span>{label}</span>
+        <Download className="w-3.5 h-3.5 text-pink-600" />
       </button>
-    );
-  }
 
-  if (isIOS) {
-    return (
-      <>
-        <button
-          onClick={() => setShowIOSGuide(true)}
-          className="min-h-[40px] inline-flex items-center gap-1.5 rounded-lg border border-pink-200 bg-pink-50 px-3 py-1.5 text-xs font-semibold text-pink-800 hover:bg-pink-100 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-        >
-          <Download className="w-3.5 h-3.5" />
-          <span>{label}</span>
-        </button>
-
-        {showIOSGuide && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl border border-pink-100">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-bold text-slate-900">Install LingoQueen on iOS</h3>
-                <button
-                  onClick={() => setShowIOSGuide(false)}
-                  className="p-2 text-slate-500 hover:text-slate-900 cursor-pointer"
-                  aria-label="Close"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+      {showGuide && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-pink-200 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <LingoQueenLogo size={32} compact />
+                <h3 className="text-lg font-bold text-purple-950">
+                  {isAr ? 'تحميل تطبيق LingoQueen' : 'Download LingoQueen App (PWA)'}
+                </h3>
               </div>
-              <p className="text-sm text-slate-600 leading-relaxed">
-                1. Tap the <strong>Share</strong> icon in Safari’s toolbar.
-                <br />
-                2. Scroll down and tap <strong>Add to Home Screen</strong>.
-              </p>
               <button
-                onClick={() => setShowIOSGuide(false)}
-                className="mt-5 w-full min-h-[44px] rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 py-2.5 text-sm font-semibold text-white cursor-pointer"
+                onClick={() => setShowGuide(false)}
+                className="p-2 text-slate-500 hover:text-slate-900 cursor-pointer"
+                aria-label="Close"
               >
-                Got it
+                <X className="w-4 h-4" />
               </button>
             </div>
-          </div>
-        )}
-      </>
-    );
-  }
 
-  return null;
+            <div className="rounded-xl bg-pink-50/70 border border-pink-100 p-4 text-sm text-slate-700 leading-relaxed space-y-2">
+              <div className="flex items-center gap-2 font-bold text-purple-950">
+                <Smartphone className="w-4 h-4 text-pink-600" />
+                <span>
+                  {isIOS
+                    ? isAr
+                      ? 'التثبيت على أجهزة آيفون وآيباد (Safari)'
+                      : 'Install on iPhone & iPad (Safari)'
+                    : isAr
+                    ? 'التثبيت على أندرويد والحاسوب'
+                    : 'Install on Android & Desktop'}
+                </span>
+              </div>
+              {isIOS ? (
+                <p>
+                  {isAr ? (
+                    <>
+                      1. اضغطي على أيقونة <strong>المشاركة (Share)</strong> في شريط متصفح سفاري.
+                      <br />
+                      2. اختاري <strong>إضافة إلى الشاشة الرئيسية (Add to Home Screen)</strong> لتثبيت التطبيق بشعار LingoQueen والعمل دون إنترنت.
+                    </>
+                  ) : (
+                    <>
+                      1. Tap the <strong>Share</strong> icon in Safari’s toolbar.
+                      <br />
+                      2. Scroll down and tap <strong>Add to Home Screen</strong> to install LingoQueen with its crown icon for offline use.
+                    </>
+                  )}
+                </p>
+              ) : (
+                <p>
+                  {isAr ? (
+                    <>
+                      1. افتحي قائمة المتصفح (النقاط الثلاث أعلى الشاشة) في Chrome أو Edge.
+                      <br />
+                      2. اختاري <strong>تثبيت التطبيق (Install App)</strong> أو <strong>إضافة إلى الشاشة الرئيسية</strong>.
+                    </>
+                  ) : (
+                    <>
+                      1. Click the browser menu icon or the install icon in the address bar (Chrome / Edge).
+                      <br />
+                      2. Choose <strong>Install LingoQueen</strong> to save the app with the LingoQueen logo and offline study access.
+                    </>
+                  )}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={() => setShowGuide(false)}
+              className="w-full min-h-[44px] rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 py-2.5 text-sm font-semibold text-white cursor-pointer"
+            >
+              {isAr ? 'حسناً، فهمت' : 'Got it'}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
 };
 
 export const OfflineIndicator: React.FC<{ message: string }> = ({ message }) => {

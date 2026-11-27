@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  Headphones,
   Mic,
   Play,
   RotateCcw,
@@ -15,7 +16,9 @@ import { LanguageMeta, Lesson, LessonResult, UILanguage } from '../types';
 import {
   analyzeWritingOffline,
   computePronunciationScore,
+  speakDialogueLines,
   speakText,
+  stopSpeech,
 } from '../utils/speech';
 import { launchRoyalConfetti } from '../utils/confetti';
 
@@ -33,7 +36,7 @@ const STEPS = [
   { id: 'speaking', labelEn: '3. Speaking', labelAr: '3. المحادثة' },
   { id: 'dialogues', labelEn: '4. 2 Dialogues', labelAr: '4. الحواران' },
   { id: 'writing', labelEn: '5. Writing (5–8)', labelAr: '5. الكتابة' },
-  { id: 'voice', labelEn: '6. Voice Rec', labelAr: '6. التسجيل الصوتي' },
+  { id: 'voice', labelEn: '6. Listening & Voice', labelAr: '6. الاستماع والنطق' },
   { id: 'exercises', labelEn: '7. 3 Exercises', labelAr: '7. 3 تمارين' },
   { id: 'quiz', labelEn: '8. 10-Q Quiz', labelAr: '8. اختبار 10 أسئلة' },
 ] as const;
@@ -45,11 +48,19 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
   onComplete,
   onExit,
 }) => {
+  const isAr = uiLang === 'ar';
+  const isCJK = language.id === 'zh';
   const [stepIdx, setStepIdx] = useState(0);
 
   // Step 2: Grammar sentence formation
   const [builtWords, setBuiltWords] = useState<number[]>([]);
   const [grammarChecked, setGrammarChecked] = useState<boolean | null>(null);
+
+  // Step 4: Dialogue sequential playback
+  const [playingDialogue, setPlayingDialogue] = useState<{
+    dialogueIdx: number;
+    lineIdx: number;
+  } | null>(null);
 
   // Step 5: Writing (5-8 sentences)
   const [writingText, setWritingText] = useState('');
@@ -62,7 +73,9 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
     corrections: string[];
   } | null>(null);
 
-  // Step 6: Voice Recording + Pronunciation Score
+  // Step 6: Listening Comprehension + Voice Recording + Pronunciation Score
+  const [listeningChoice, setListeningChoice] = useState<number | null>(null);
+  const [listeningRevealText, setListeningRevealText] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
   const [recognizedText, setRecognizedText] = useState<string>('');
@@ -71,6 +84,7 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const recordStartRef = useRef<number>(0);
+  const recordedUrlRef = useRef<string | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
 
@@ -86,12 +100,20 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
   const [lessonResult, setLessonResult] = useState<LessonResult | null>(null);
 
   useEffect(() => {
+    stopSpeech();
+    setPlayingDialogue(null);
     setStepIdx(0);
     setBuiltWords([]);
     setGrammarChecked(null);
     setWritingText('');
     setWritingResult(null);
     setWritingError(null);
+    setListeningChoice(null);
+    setListeningRevealText(false);
+    if (recordedUrlRef.current) {
+      URL.revokeObjectURL(recordedUrlRef.current);
+      recordedUrlRef.current = null;
+    }
     setRecordedUrl(null);
     setRecognizedText('');
     setPronunciationScore(null);
@@ -104,18 +126,67 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
     setLessonResult(null);
   }, [lesson.id, language.id]);
 
+  useEffect(() => {
+    return () => {
+      stopSpeech();
+      if (recordedUrlRef.current) {
+        URL.revokeObjectURL(recordedUrlRef.current);
+      }
+    };
+  }, []);
+
+  // Listening challenge options built deterministically from lesson prompts
+  const listeningChallenge = useMemo(() => {
+    const correctOption = {
+      english: lesson.voicePrompt.english,
+      arabic: lesson.voicePrompt.arabic,
+      isCorrect: true,
+    };
+    const distractors = [
+      {
+        english: lesson.speaking.english,
+        arabic: lesson.speaking.arabic,
+        isCorrect: false,
+      },
+      {
+        english: lesson.grammar.examples[0]?.english || 'Good morning, how may I help you?',
+        arabic: lesson.grammar.examples[0]?.arabic || 'صباح الخير، كيف يمكنني مساعدتكم؟',
+        isCorrect: false,
+      },
+      {
+        english: lesson.grammar.examples[1]?.english || 'Please reserve two seats near the window.',
+        arabic: lesson.grammar.examples[1]?.arabic || 'يرجى حجز مقعدين قرب النافذة.',
+        isCorrect: false,
+      },
+    ];
+    const items = [correctOption, ...distractors];
+    const offset = lesson.id % items.length;
+    const rotated = [...items.slice(offset), ...items.slice(0, offset)];
+    return {
+      options: rotated,
+      correctIndex: rotated.findIndex((x) => x.isCorrect),
+    };
+  }, [lesson]);
+
   // Grammar sentence formation helpers
   const scrambled = lesson.grammar.sentenceFormation.scrambledWords;
-  const builtSentence = builtWords.map((i) => scrambled[i]).join(' ');
+  const builtSentence = builtWords.map((i) => scrambled[i]).join(isCJK ? '' : ' ');
+
+  const normalizeSentence = (s: string) => {
+    const base = s
+      .toLowerCase()
+      .replace(/[.,!?;:'"«»。！？،؟、]/g, '');
+    return isCJK ? base.replace(/\s+/g, '').trim() : base.replace(/\s+/g, ' ').trim();
+  };
 
   const checkGrammarSentence = () => {
-    const cleanTarget = lesson.grammar.sentenceFormation.targetSentence
-      .toLowerCase()
-      .replace(/\s+/g, ' ')
-      .trim();
-    const cleanBuilt = builtSentence.toLowerCase().replace(/\s+/g, ' ').trim();
-    setGrammarChecked(cleanTarget === cleanBuilt);
-    if (cleanTarget === cleanBuilt) {
+    const cleanTarget = normalizeSentence(
+      lesson.grammar.sentenceFormation.targetSentence
+    );
+    const cleanBuilt = normalizeSentence(builtSentence);
+    const matched = cleanTarget === cleanBuilt;
+    setGrammarChecked(matched);
+    if (matched) {
       speakText(lesson.grammar.sentenceFormation.targetSentence, language.speechLang);
     }
   };
@@ -156,7 +227,6 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
       const data = await res.json();
       setWritingResult(data);
     } catch (err: unknown) {
-      // Fallback gracefully ONLY if offline/static Netlify, otherwise surface clear error + local check option
       const msg = err instanceof Error ? err.message : 'Server unreachable';
       setWritingError(msg);
       const localCheck = analyzeWritingOffline(
@@ -184,14 +254,17 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
       };
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        if (recordedUrlRef.current) {
+          URL.revokeObjectURL(recordedUrlRef.current);
+        }
         const url = URL.createObjectURL(blob);
+        recordedUrlRef.current = url;
         setRecordedUrl(url);
         stream.getTracks().forEach((t) => t.stop());
 
         const durationSec = (Date.now() - recordStartRef.current) / 1000;
         setPronunciationScore((prev) => {
           if (prev !== null && prev > 0) return prev;
-          // Acoustic duration heuristic when SpeechRecognition didn't emit a transcript
           return durationSec >= 1.2 ? 82 : 64;
         });
       };
@@ -200,7 +273,6 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
       recorder.start();
       setIsRecording(true);
 
-      // Try Web SpeechRecognition if available for exact word-match pronunciation score
       const SpeechRec =
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -227,7 +299,9 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
       }
     } catch {
       setMicError(
-        'Microphone permission is required for live recording. You can enable it in browser settings.'
+        isAr
+          ? 'يلزم السماح باستخدام الميكروفون للتسجيل المباشر. يمكنكِ تفعيله من إعدادات المتصفح.'
+          : 'Microphone permission is required for live recording. You can enable it in browser settings.'
       );
     }
   };
@@ -248,11 +322,14 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
 
   // Exercise 2 matching helper
   const ex2Pairs = lesson.exercises[1].pairs || [];
-  const ex2RightShuffled = [...ex2Pairs].reverse();
+  const ex2RightShuffled =
+    ex2Pairs.length === 4
+      ? [ex2Pairs[2], ex2Pairs[0], ex2Pairs[3], ex2Pairs[1]]
+      : [...ex2Pairs].reverse();
 
   // Exercise 3 sentence ordering helper
   const ex3Tokens = lesson.exercises[2].tokens || [];
-  const ex3Built = ex3Order.map((i) => ex3Tokens[i]).join(' ');
+  const ex3Built = ex3Order.map((i) => ex3Tokens[i]).join(isCJK ? '' : ' ');
 
   // Submit full lesson quiz & calculate /100 + correct/wrong + XP
   const handleFinishLesson = () => {
@@ -261,7 +338,7 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
       if (quizAnswers[idx] === q.correctIndex) correct++;
     });
 
-    const total = lesson.quiz.length; // 10
+    const total = lesson.quiz.length;
     const wrong = total - correct;
     const quizPercent = Math.round((correct / total) * 100);
     const bonusWriting = writingResult ? Math.round(writingResult.score * 0.1) : 0;
@@ -293,15 +370,19 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-4 bg-white rounded-2xl p-4 sm:p-5 border border-pink-100 shadow-sm">
         <div className="flex items-center gap-3">
           <button
-            onClick={onExit}
+            onClick={() => {
+              stopSpeech();
+              onExit();
+            }}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl border border-pink-200 text-purple-900 hover:bg-pink-50 cursor-pointer"
-            aria-label="Back to curriculum"
+            aria-label={isAr ? 'العودة إلى الدروس' : 'Back to curriculum'}
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
             <div className="text-xs font-semibold text-pink-700">
-              {language.name} · Lesson {lesson.id}/50 · {lesson.level}
+              {isAr ? language.arabicName : language.name} ·{' '}
+              {isAr ? `الدرس ${lesson.id}/50` : `Lesson ${lesson.id}/50`} · {lesson.level}
             </div>
             <h1 className="text-lg sm:text-xl font-bold text-purple-950">
               {lesson.title}
@@ -310,7 +391,9 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
         </div>
 
         <div className="text-xs font-semibold text-purple-800 tabular-nums">
-          Step {stepIdx + 1} of {STEPS.length}
+          {isAr
+            ? `الخطوة ${stepIdx + 1} من ${STEPS.length}`
+            : `Step ${stepIdx + 1} of ${STEPS.length}`}
         </div>
       </div>
 
@@ -319,14 +402,18 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
         {STEPS.map((s, idx) => (
           <button
             key={s.id}
-            onClick={() => setStepIdx(idx)}
+            onClick={() => {
+              stopSpeech();
+              setPlayingDialogue(null);
+              setStepIdx(idx);
+            }}
             className={`min-h-[40px] px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 transition cursor-pointer ${
               stepIdx === idx
                 ? 'bg-gradient-to-r from-pink-600 to-purple-700 text-white shadow-sm'
                 : 'bg-white border border-pink-100 text-slate-600 hover:border-pink-300'
             }`}
           >
-            {uiLang === 'ar' ? s.labelAr : s.labelEn}
+            {isAr ? s.labelAr : s.labelEn}
           </button>
         ))}
       </div>
@@ -339,34 +426,44 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
               <Sparkles className="w-8 h-8" />
             </div>
             <h2 className="text-2xl sm:text-3xl font-bold text-purple-950">
-              Lesson {lesson.id} Completed!
+              {isAr ? `أُتمّ الدرس ${lesson.id} بنجاح!` : `Lesson ${lesson.id} Completed!`}
             </h2>
             <p className="text-sm text-slate-600">
-              Progress saved permanently for {language.name}.
+              {isAr
+                ? `تم حفظ التقدم بشكل دائم في مسار ${language.arabicName}.`
+                : `Progress saved permanently for ${language.name}.`}
             </p>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="rounded-xl bg-pink-50 border border-pink-100 p-4 text-center">
-              <div className="text-xs text-slate-600">Score / 100</div>
+              <div className="text-xs text-slate-600">
+                {isAr ? 'النتيجة / 100' : 'Score / 100'}
+              </div>
               <div className="text-2xl font-bold text-pink-700 tabular-nums mt-1">
                 {lessonResult.score}/100
               </div>
             </div>
             <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 text-center">
-              <div className="text-xs text-slate-600">Correct Answers</div>
+              <div className="text-xs text-slate-600">
+                {isAr ? 'الإجابات الصحيحة' : 'Correct Answers'}
+              </div>
               <div className="text-2xl font-bold text-emerald-700 tabular-nums mt-1">
                 {lessonResult.correctAnswers}/{lessonResult.totalQuestions}
               </div>
             </div>
             <div className="rounded-xl bg-rose-50 border border-rose-100 p-4 text-center">
-              <div className="text-xs text-slate-600">Wrong Answers</div>
+              <div className="text-xs text-slate-600">
+                {isAr ? 'الإجابات الخاطئة' : 'Wrong Answers'}
+              </div>
               <div className="text-2xl font-bold text-rose-700 tabular-nums mt-1">
                 {lessonResult.wrongAnswers}
               </div>
             </div>
             <div className="rounded-xl bg-purple-50 border border-purple-100 p-4 text-center">
-              <div className="text-xs text-slate-600">XP Earned</div>
+              <div className="text-xs text-slate-600">
+                {isAr ? 'النقاط المكتسبة' : 'XP Earned'}
+              </div>
               <div className="text-2xl font-bold text-purple-800 tabular-nums mt-1">
                 +{lessonResult.xpEarned} XP
               </div>
@@ -374,7 +471,9 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
           </div>
 
           <div className="space-y-2.5">
-            <h3 className="text-sm font-bold text-slate-900">10-Question Review</h3>
+            <h3 className="text-sm font-bold text-slate-900">
+              {isAr ? 'مراجعة الأسئلة العشرة' : '10-Question Review'}
+            </h3>
             {lesson.quiz.map((q, idx) => {
               const ok = quizAnswers[idx] === q.correctIndex;
               return (
@@ -403,7 +502,9 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
               onClick={onExit}
               className="min-h-[44px] px-6 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 text-sm font-semibold text-white cursor-pointer"
             >
-              Back to {language.name} Academy
+              {isAr
+                ? `العودة إلى أكاديمية ${language.arabicName}`
+                : `Back to ${language.name} Academy`}
             </button>
           </div>
         </div>
@@ -414,10 +515,12 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
             <div className="space-y-4">
               <div>
                 <h2 className="text-lg font-bold text-purple-950">
-                  10 Essential Vocabulary Words
+                  {isAr ? '10 كلمات ومفردات أساسية' : '10 Essential Vocabulary Words'}
                 </h2>
                 <p className="text-sm text-slate-600">
-                  Listen to native pronunciation and learn every English & Arabic meaning.
+                  {isAr
+                    ? 'استمعي إلى النطق الصحيح وتعلمي المعنى بالإنجليزية والعربية الفصحى مع مثال تطبيقي.'
+                    : 'Listen to native pronunciation and learn every English & Fusha Arabic meaning.'}
                 </p>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -462,7 +565,7 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
             <div className="space-y-6">
               <div className="rounded-xl bg-purple-50/70 border border-purple-100 p-5 space-y-2">
                 <div className="text-xs font-semibold text-purple-700">
-                  Grammar Rule · {lesson.level}
+                  {isAr ? `القاعدة النحوية · ${lesson.level}` : `Grammar Rule · ${lesson.level}`}
                 </div>
                 <h2 className="text-xl font-bold text-purple-950">
                   {lesson.grammar.title}
@@ -471,28 +574,31 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                   {lesson.grammar.explanation}
                 </p>
                 <div className="pt-2 font-mono text-xs sm:text-sm font-semibold text-pink-800">
-                  Pattern: {lesson.grammar.formula}
+                  {isAr ? 'التركيب:' : 'Pattern:'} {lesson.grammar.formula}
                 </div>
               </div>
 
               <div className="space-y-2">
-                <h3 className="text-sm font-bold text-slate-900">Examples</h3>
+                <h3 className="text-sm font-bold text-slate-900">
+                  {isAr ? 'أمثلة تطبيقية' : 'Examples'}
+                </h3>
                 {lesson.grammar.examples.map((ex, i) => (
                   <div
                     key={i}
                     className="rounded-xl border border-slate-200 p-3.5 flex items-center justify-between gap-3"
                   >
-                    <div>
+                    <div className="space-y-0.5">
                       <p className="font-semibold text-purple-950 text-sm">
                         {ex.target}
                       </p>
-                      <p className="text-xs text-slate-600 mt-0.5">
-                        {ex.english} · {ex.arabic}
+                      <p className="text-xs text-slate-600">{ex.english}</p>
+                      <p className="text-xs font-semibold text-pink-700" dir="rtl">
+                        {ex.arabic}
                       </p>
                     </div>
                     <button
                       onClick={() => speakText(ex.target, language.speechLang)}
-                      className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg border border-pink-200 text-pink-700 hover:bg-pink-50 cursor-pointer"
+                      className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg border border-pink-200 text-pink-700 hover:bg-pink-50 cursor-pointer shrink-0"
                       aria-label="Listen example"
                     >
                       <Volume2 className="w-4 h-4" />
@@ -503,19 +609,37 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
 
               {/* Interactive Sentence Formation */}
               <div className="rounded-xl border border-pink-200 p-5 space-y-4 bg-pink-50/30">
-                <div>
-                  <h3 className="text-base font-bold text-purple-950">
-                    Interactive Sentence Formation
-                  </h3>
-                  <p className="text-sm text-slate-600">
-                    {lesson.grammar.sentenceFormation.prompt}
-                  </p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-base font-bold text-purple-950">
+                      {isAr ? 'تكوين الجملة التفاعلي' : 'Interactive Sentence Formation'}
+                    </h3>
+                    <p className="text-sm text-slate-600">
+                      {lesson.grammar.sentenceFormation.prompt}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      speakText(
+                        lesson.grammar.sentenceFormation.targetSentence,
+                        language.speechLang,
+                        0.85
+                      )
+                    }
+                    className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-pink-200 text-xs font-semibold text-pink-700 hover:bg-pink-50 cursor-pointer"
+                  >
+                    <Volume2 className="w-3.5 h-3.5" />
+                    <span>{isAr ? 'استماع للجملة' : 'Hear Target'}</span>
+                  </button>
                 </div>
 
                 <div className="min-h-[56px] rounded-xl bg-white border border-pink-200 p-3 flex flex-wrap gap-2 items-center">
                   {builtWords.length === 0 ? (
                     <span className="text-xs text-slate-400">
-                      Tap the word tiles below in the right grammatical order...
+                      {isAr
+                        ? 'اضغطي على الكلمات أدناه بالترتيب النحوي الصحيح...'
+                        : 'Tap the word tiles below in the right grammatical order...'}
                     </span>
                   ) : (
                     builtWords.map((wordIdx, pos) => (
@@ -561,7 +685,7 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                     onClick={checkGrammarSentence}
                     className="min-h-[44px] px-5 py-2 rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 text-sm font-semibold text-white cursor-pointer"
                   >
-                    Check Sentence
+                    {isAr ? 'تحقق من الجملة' : 'Check Sentence'}
                   </button>
                   <button
                     onClick={() => {
@@ -571,7 +695,7 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                     className="min-h-[44px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-sm text-slate-700 hover:bg-slate-50 cursor-pointer"
                   >
                     <RotateCcw className="w-4 h-4" />
-                    <span>Reset</span>
+                    <span>{isAr ? 'إعادة' : 'Reset'}</span>
                   </button>
                   {grammarChecked !== null && (
                     <span
@@ -580,7 +704,11 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                       }`}
                     >
                       {grammarChecked
-                        ? 'Perfect grammatical order!'
+                        ? isAr
+                          ? 'ترتيب نحوي مثالي!'
+                          : 'Perfect grammatical order!'
+                        : isAr
+                        ? `حاولي مجدداً — الصحيح: "${lesson.grammar.sentenceFormation.targetSentence}"`
                         : `Try again — Target: "${lesson.grammar.sentenceFormation.targetSentence}"`}
                     </span>
                   )}
@@ -593,33 +721,31 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
           {step.id === 'speaking' && (
             <div className="space-y-5">
               <h2 className="text-lg font-bold text-purple-950">
-                Guided Speaking Drill
+                {isAr ? 'تدريب المحادثة الموجّه' : 'Guided Speaking Drill'}
               </h2>
               <div className="rounded-2xl bg-gradient-to-br from-pink-50 to-purple-50 border border-pink-200 p-6 space-y-4">
                 <p className="text-xs font-semibold text-pink-700">
-                  Target Expression
+                  {isAr ? 'العبارة المستهدفة' : 'Target Expression'}
                 </p>
                 <p className="text-2xl font-bold text-purple-950">
                   {lesson.speaking.phrase}
                 </p>
                 <p className="text-sm text-slate-600">
-                  Phonetic: /{lesson.speaking.phonetic}/
+                  {isAr ? 'النطق الصوتي:' : 'Phonetic:'} /{lesson.speaking.phonetic}/
                 </p>
-                <p className="text-sm text-slate-800">
-                  {lesson.speaking.english} ·{' '}
-                  <span className="text-pink-700 font-semibold">
-                    {lesson.speaking.arabic}
-                  </span>
+                <p className="text-sm text-slate-800">{lesson.speaking.english}</p>
+                <p className="text-sm text-pink-700 font-semibold" dir="rtl">
+                  {lesson.speaking.arabic}
                 </p>
                 <div className="pt-2 flex flex-wrap gap-3">
                   <button
                     onClick={() =>
-                      speakText(lesson.speaking.phrase, language.speechLang, 0.9)
+                      speakText(lesson.speaking.phrase, language.speechLang, 0.92)
                     }
                     className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 text-sm font-semibold text-white cursor-pointer"
                   >
                     <Volume2 className="w-4 h-4" />
-                    <span>Listen Normal Speed</span>
+                    <span>{isAr ? 'استماع بالسرعة العادية' : 'Listen Normal Speed'}</span>
                   </button>
                   <button
                     onClick={() =>
@@ -628,12 +754,14 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                     className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-pink-200 text-sm font-semibold text-purple-900 cursor-pointer"
                   >
                     <Volume2 className="w-4 h-4" />
-                    <span>Slow Pronunciation</span>
+                    <span>{isAr ? 'نطق بطيء واضح' : 'Slow Pronunciation'}</span>
                   </button>
                 </div>
               </div>
               <div className="rounded-xl border border-purple-100 bg-white p-4 text-sm text-slate-700">
-                <strong className="text-purple-900">Coach Tip:</strong>{' '}
+                <strong className="text-purple-900">
+                  {isAr ? 'نصيحة النطق:' : 'Coach Tip:'}
+                </strong>{' '}
                 {lesson.speaking.tip}
               </div>
             </div>
@@ -643,64 +771,96 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
           {step.id === 'dialogues' && (
             <div className="space-y-6">
               <h2 className="text-lg font-bold text-purple-950">
-                Two Real-World Dialogues
+                {isAr ? 'حواران واقعيان مع الترجمة الفصحى' : 'Two Real-World Dialogues'}
               </h2>
-              {lesson.dialogues.map((dlg, dIdx) => (
-                <div
-                  key={dIdx}
-                  className="rounded-2xl border border-pink-100 bg-pink-50/20 p-5 space-y-4"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-pink-100 pb-3">
-                    <div>
-                      <h3 className="text-base font-bold text-purple-950">
-                        Dialogue {dIdx + 1}: {dlg.title}
-                      </h3>
-                      <p className="text-xs text-slate-600">{dlg.context}</p>
-                    </div>
-                    <button
-                      onClick={() =>
-                        speakText(
-                          dlg.lines.map((l) => l.text).join('. '),
-                          language.speechLang
-                        )
-                      }
-                      className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-white border border-pink-200 text-xs font-semibold text-pink-700 hover:bg-pink-50 cursor-pointer"
-                    >
-                      <Play className="w-3.5 h-3.5" />
-                      <span>Play Dialogue</span>
-                    </button>
-                  </div>
-
-                  <div className="space-y-3">
-                    {dlg.lines.map((line, lIdx) => (
-                      <div
-                        key={lIdx}
-                        className="rounded-xl bg-white border border-slate-200 p-3.5 flex items-start justify-between gap-3"
-                      >
-                        <div className="space-y-1">
-                          <div className="text-xs font-bold text-pink-700">
-                            {line.speaker}
-                          </div>
-                          <p className="text-sm font-semibold text-slate-900">
-                            {line.text}
-                          </p>
-                          <p className="text-xs text-slate-600">{line.english}</p>
-                          <p className="text-xs text-purple-800" dir="rtl">
-                            {line.arabic}
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => speakText(line.text, language.speechLang)}
-                          className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg border border-pink-100 text-pink-700 hover:bg-pink-50 shrink-0 cursor-pointer"
-                          aria-label="Listen line"
-                        >
-                          <Volume2 className="w-4 h-4" />
-                        </button>
+              {lesson.dialogues.map((dlg, dIdx) => {
+                const isThisPlaying = playingDialogue?.dialogueIdx === dIdx;
+                return (
+                  <div
+                    key={dIdx}
+                    className="rounded-2xl border border-pink-100 bg-pink-50/20 p-5 space-y-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-pink-100 pb-3">
+                      <div>
+                        <h3 className="text-base font-bold text-purple-950">
+                          {isAr ? `الحوار ${dIdx + 1}:` : `Dialogue ${dIdx + 1}:`} {dlg.title}
+                        </h3>
+                        <p className="text-xs text-slate-600">{dlg.context}</p>
                       </div>
-                    ))}
+                      {isThisPlaying ? (
+                        <button
+                          onClick={() => {
+                            stopSpeech();
+                            setPlayingDialogue(null);
+                          }}
+                          className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-rose-600 text-xs font-semibold text-white cursor-pointer"
+                        >
+                          <Square className="w-3.5 h-3.5" />
+                          <span>{isAr ? 'إيقاف' : 'Stop'}</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() =>
+                            speakDialogueLines(
+                              dlg.lines.map((l) => l.text),
+                              language.speechLang,
+                              (lineIdx) => {
+                                if (lineIdx === null) setPlayingDialogue(null);
+                                else setPlayingDialogue({ dialogueIdx: dIdx, lineIdx });
+                              }
+                            )
+                          }
+                          className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-white border border-pink-200 text-xs font-semibold text-pink-700 hover:bg-pink-50 cursor-pointer"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          <span>{isAr ? 'تشغيل الحوار كاملاً' : 'Play Dialogue'}</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="space-y-3">
+                      {dlg.lines.map((line, lIdx) => {
+                        const activeLine =
+                          playingDialogue?.dialogueIdx === dIdx &&
+                          playingDialogue?.lineIdx === lIdx;
+                        return (
+                          <div
+                            key={lIdx}
+                            className={`rounded-xl border p-3.5 flex items-start justify-between gap-3 transition ${
+                              activeLine
+                                ? 'bg-pink-50 border-pink-500 ring-2 ring-pink-300'
+                                : 'bg-white border-slate-200'
+                            }`}
+                          >
+                            <div className="space-y-1">
+                              <div className="text-xs font-bold text-pink-700">
+                                {line.speaker}
+                              </div>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {line.text}
+                              </p>
+                              <p className="text-xs text-slate-600">{line.english}</p>
+                              <p className="text-xs text-purple-800 font-medium" dir="rtl">
+                                {line.arabic}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => {
+                                setPlayingDialogue(null);
+                                speakText(line.text, language.speechLang);
+                              }}
+                              className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg border border-pink-100 text-pink-700 hover:bg-pink-50 shrink-0 cursor-pointer"
+                              aria-label="Listen line"
+                            >
+                              <Volume2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -709,13 +869,14 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
             <div className="space-y-5">
               <div>
                 <h2 className="text-lg font-bold text-purple-950">
-                  Writing Practice (5–8 Sentences)
+                  {isAr ? 'تدريب الكتابة (5–8 جمل)' : 'Writing Practice (5–8 Sentences)'}
                 </h2>
                 <p className="text-sm text-slate-700 mt-1">
                   {lesson.writingPrompt.prompt}
                 </p>
                 <p className="text-xs text-purple-700 mt-2">
-                  Suggested vocabulary: {lesson.writingPrompt.suggestedWords.join(' · ')}
+                  {isAr ? 'مفردات مقترحة:' : 'Suggested vocabulary:'}{' '}
+                  {lesson.writingPrompt.suggestedWords.join(' · ')}
                 </p>
               </div>
 
@@ -723,32 +884,44 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                 value={writingText}
                 onChange={(e) => setWritingText(e.target.value)}
                 rows={6}
-                placeholder={`Write 5–8 sentences in ${language.name}...`}
+                placeholder={
+                  isAr
+                    ? `اكتبي 5–8 جمل باللغة ${language.arabicName}...`
+                    : `Write 5–8 sentences in ${language.name}...`
+                }
                 className="w-full rounded-xl border border-pink-200 bg-white p-4 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-pink-500"
               />
 
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <span className="text-xs text-slate-500 tabular-nums">
-                  Sentences detected:{' '}
+                  {isAr ? 'عدد الجمل المكتشفة:' : 'Sentences detected:'}{' '}
                   {
                     writingText
                       .split(/[.!?。！？\n]+/)
-                      .filter((s) => s.trim().length > 2).length
+                      .filter((s) => s.trim().length > 1).length
                   }{' '}
-                  (target: 5–8)
+                  {isAr ? '(المطلوب: 5–8)' : '(target: 5–8)'}
                 </span>
                 <button
                   onClick={handleEvaluateWriting}
                   disabled={writingLoading || !writingText.trim()}
                   className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 text-sm font-semibold text-white disabled:opacity-50 cursor-pointer"
                 >
-                  {writingLoading ? 'Evaluating...' : 'Correct & Score Writing'}
+                  {writingLoading
+                    ? isAr
+                      ? 'جارٍ التقييم...'
+                      : 'Evaluating...'
+                    : isAr
+                    ? 'تصحيح وتقييم الكتابة'
+                    : 'Correct & Score Writing'}
                 </button>
               </div>
 
               {writingError && (
                 <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  Cloud feedback unavailable ({writingError}) — showing local linguistic rubric evaluation.
+                  {isAr
+                    ? 'التقييم السحابي غير متاح حالياً — تم تطبيق التصحيح اللغوي المحلي.'
+                    : `Cloud feedback unavailable (${writingError}) — showing local linguistic rubric evaluation.`}
                 </p>
               )}
 
@@ -756,16 +929,16 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                 <div className="rounded-2xl border border-purple-200 bg-purple-50/50 p-5 space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-base font-bold text-purple-950">
-                      Writing Evaluation
+                      {isAr ? 'تقييم الكتابة' : 'Writing Evaluation'}
                     </h3>
                     <span className="text-xl font-bold text-pink-700 tabular-nums">
-                      Score: {writingResult.score}/100
+                      {isAr ? 'النتيجة:' : 'Score:'} {writingResult.score}/100
                     </span>
                   </div>
                   <p className="text-sm text-slate-700">{writingResult.feedback}</p>
                   <div className="rounded-xl bg-white border border-purple-100 p-3.5">
                     <div className="text-xs font-semibold text-purple-800 mb-1">
-                      Polished Version
+                      {isAr ? 'النص المصحح' : 'Polished Version'}
                     </div>
                     <p className="text-sm text-slate-900">{writingResult.correctedText}</p>
                   </div>
@@ -779,90 +952,175 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
             </div>
           )}
 
-          {/* STEP 6: VOICE RECORDING + PRONUNCIATION SCORE */}
+          {/* STEP 6: LISTENING COMPREHENSION + VOICE RECORDING + PRONUNCIATION SCORE */}
           {step.id === 'voice' && (
-            <div className="space-y-5">
-              <div>
-                <h2 className="text-lg font-bold text-purple-950">
-                  Voice Recording & Pronunciation Score
-                </h2>
-                <p className="text-sm text-slate-600">
-                  Listen to the target sentence, record your voice, and get your pronunciation score.
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-pink-200 bg-pink-50/40 p-5 space-y-3">
-                <p className="text-xl font-bold text-purple-950">
-                  {lesson.voicePrompt.targetPhrase}
-                </p>
-                <p className="text-xs text-slate-600">
-                  /{lesson.voicePrompt.phonetic}/ · {lesson.voicePrompt.english} ·{' '}
-                  {lesson.voicePrompt.arabic}
-                </p>
-                <div className="flex flex-wrap gap-3 pt-2">
-                  <button
-                    onClick={() =>
-                      speakText(lesson.voicePrompt.targetPhrase, language.speechLang)
-                    }
-                    className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-pink-200 text-sm font-semibold text-purple-900 cursor-pointer"
-                  >
-                    <Volume2 className="w-4 h-4" />
-                    <span>Hear Model Audio</span>
-                  </button>
-
-                  {!isRecording ? (
+            <div className="space-y-6">
+              {/* Part A: Interactive Listening Comprehension */}
+              <div className="rounded-2xl border border-purple-200 bg-purple-50/40 p-5 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <Headphones className="w-5 h-5 text-purple-700" />
+                    <div>
+                      <h2 className="text-base font-bold text-purple-950">
+                        {isAr ? 'تحدي فهم المسموع' : 'Listening Comprehension Check'}
+                      </h2>
+                      <p className="text-xs text-slate-600">
+                        {isAr
+                          ? 'استمعي إلى التسجيل الصوتي أولاً ثم اختاري المعنى الصحيح دون قراءة النص.'
+                          : 'Listen to the native audio first, then pick the accurate meaning.'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={startRecording}
-                      className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 text-sm font-semibold text-white cursor-pointer"
+                      onClick={() =>
+                        speakText(lesson.voicePrompt.targetPhrase, language.speechLang, 0.9)
+                      }
+                      className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-900 text-xs font-semibold text-white cursor-pointer"
                     >
-                      <Mic className="w-4 h-4" />
-                      <span>Start Recording</span>
+                      <Volume2 className="w-4 h-4" />
+                      <span>{isAr ? 'تشغيل الصوت' : 'Play Audio'}</span>
                     </button>
-                  ) : (
                     <button
-                      onClick={stopRecording}
-                      className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-rose-600 text-sm font-semibold text-white cursor-pointer"
+                      onClick={() => setListeningRevealText((v) => !v)}
+                      className="min-h-[40px] px-3 py-2 rounded-xl bg-white border border-purple-200 text-xs font-semibold text-purple-900 cursor-pointer"
                     >
-                      <Square className="w-4 h-4" />
-                      <span>Stop Recording</span>
+                      {listeningRevealText
+                        ? isAr
+                          ? 'إخفاء النص'
+                          : 'Hide Text'
+                        : isAr
+                        ? 'إظهار النص'
+                        : 'Show Transcript'}
                     </button>
-                  )}
+                  </div>
+                </div>
+
+                {listeningRevealText && (
+                  <div className="rounded-xl bg-white border border-purple-100 p-3 text-sm font-semibold text-purple-950">
+                    {lesson.voicePrompt.targetPhrase}{' '}
+                    <span className="text-xs font-normal text-slate-500">
+                      /{lesson.voicePrompt.phonetic}/
+                    </span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {listeningChallenge.options.map((opt, idx) => {
+                    const picked = listeningChoice === idx;
+                    const isRight = idx === listeningChallenge.correctIndex;
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => setListeningChoice(idx)}
+                        className={`min-h-[44px] text-left px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm transition cursor-pointer ${
+                          picked
+                            ? isRight
+                              ? 'border-emerald-500 bg-emerald-50 text-emerald-950 font-semibold'
+                              : 'border-rose-500 bg-rose-50 text-rose-950 font-semibold'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-pink-300'
+                        }`}
+                      >
+                        <div>{opt.english}</div>
+                        <div className="text-[11px] text-pink-700 mt-0.5" dir="rtl">
+                          {opt.arabic}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              {micError && (
-                <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">
-                  {micError}
-                </p>
-              )}
+              {/* Part B: Voice Recording & Pronunciation Score */}
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-lg font-bold text-purple-950">
+                    {isAr
+                      ? 'التسجيل الصوتي وتقييم النطق'
+                      : 'Voice Recording & Pronunciation Score'}
+                  </h3>
+                  <p className="text-sm text-slate-600">
+                    {isAr
+                      ? 'استمعي إلى الجملة النموذجية، سجّلي صوتكِ، واحصلي على تقييم فوري لنطقكِ.'
+                      : 'Listen to the target sentence, record your voice, and get your pronunciation score.'}
+                  </p>
+                </div>
 
-              {recordedUrl && (
-                <div className="rounded-2xl border border-purple-200 bg-white p-5 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-xs font-semibold text-slate-500">
-                        Your Playback
-                      </div>
-                      <audio controls src={recordedUrl} className="mt-2 h-10" />
-                    </div>
-                    {pronunciationScore !== null && (
-                      <div className="text-right">
-                        <div className="text-xs text-slate-500">
-                          Pronunciation Score
-                        </div>
-                        <div className="text-3xl font-bold text-pink-700 tabular-nums">
-                          {pronunciationScore}/100
-                        </div>
-                      </div>
+                <div className="rounded-2xl border border-pink-200 bg-pink-50/40 p-5 space-y-3">
+                  <p className="text-xl font-bold text-purple-950">
+                    {lesson.voicePrompt.targetPhrase}
+                  </p>
+                  <p className="text-xs text-slate-600">
+                    /{lesson.voicePrompt.phonetic}/ · {lesson.voicePrompt.english}
+                  </p>
+                  <p className="text-xs font-semibold text-pink-700" dir="rtl">
+                    {lesson.voicePrompt.arabic}
+                  </p>
+                  <div className="flex flex-wrap gap-3 pt-2">
+                    <button
+                      onClick={() =>
+                        speakText(lesson.voicePrompt.targetPhrase, language.speechLang, 0.88)
+                      }
+                      className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-pink-200 text-sm font-semibold text-purple-900 cursor-pointer"
+                    >
+                      <Volume2 className="w-4 h-4" />
+                      <span>{isAr ? 'استماع للنطق النموذجي' : 'Hear Model Audio'}</span>
+                    </button>
+
+                    {!isRecording ? (
+                      <button
+                        onClick={startRecording}
+                        className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 text-sm font-semibold text-white cursor-pointer"
+                      >
+                        <Mic className="w-4 h-4" />
+                        <span>{isAr ? 'بدء التسجيل' : 'Start Recording'}</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={stopRecording}
+                        className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-rose-600 text-sm font-semibold text-white cursor-pointer"
+                      >
+                        <Square className="w-4 h-4" />
+                        <span>{isAr ? 'إيقاف التسجيل' : 'Stop Recording'}</span>
+                      </button>
                     )}
                   </div>
-                  {recognizedText && (
-                    <p className="text-xs text-slate-600">
-                      Heard: <strong>“{recognizedText}”</strong>
-                    </p>
-                  )}
                 </div>
-              )}
+
+                {micError && (
+                  <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">
+                    {micError}
+                  </p>
+                )}
+
+                {recordedUrl && (
+                  <div className="rounded-2xl border border-purple-200 bg-white p-5 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold text-slate-500">
+                          {isAr ? 'تسجيلكِ الصوتي' : 'Your Playback'}
+                        </div>
+                        <audio controls src={recordedUrl} className="mt-2 h-10" />
+                      </div>
+                      {pronunciationScore !== null && (
+                        <div className="text-right">
+                          <div className="text-xs text-slate-500">
+                            {isAr ? 'نتيجة النطق' : 'Pronunciation Score'}
+                          </div>
+                          <div className="text-3xl font-bold text-pink-700 tabular-nums">
+                            {pronunciationScore}/100
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {recognizedText && (
+                      <p className="text-xs text-slate-600">
+                        {isAr ? 'ما تم سماعه:' : 'Heard:'} <strong>“{recognizedText}”</strong>
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -870,13 +1128,13 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
           {step.id === 'exercises' && (
             <div className="space-y-6">
               <h2 className="text-lg font-bold text-purple-950">
-                3 Interactive Practice Exercises
+                {isAr ? '3 تمارين تطبيقية تفاعلية' : '3 Interactive Practice Exercises'}
               </h2>
 
               {/* Exercise 1: Fill in the blank */}
               <div className="rounded-xl border border-slate-200 p-5 space-y-3">
                 <div className="text-xs font-bold text-pink-700">
-                  Exercise 1 · Fill in the Blank
+                  {isAr ? 'التمرين 1 · املئي الفراغ' : 'Exercise 1 · Fill in the Blank'}
                 </div>
                 <p className="text-sm font-medium text-slate-900">
                   {lesson.exercises[0].prompt}
@@ -908,7 +1166,11 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                     }`}
                   >
                     {ex1Selected === lesson.exercises[0].answer
-                      ? 'Correct!'
+                      ? isAr
+                        ? 'إجابة صحيحة!'
+                        : 'Correct!'
+                      : isAr
+                      ? `الإجابة الصحيحة: ${lesson.exercises[0].answer}`
                       : `Answer: ${lesson.exercises[0].answer}`}
                   </p>
                 )}
@@ -917,10 +1179,14 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
               {/* Exercise 2: Word-to-Arabic Matching */}
               <div className="rounded-xl border border-slate-200 p-5 space-y-3">
                 <div className="text-xs font-bold text-pink-700">
-                  Exercise 2 · Match Words to Arabic
+                  {isAr
+                    ? 'التمرين 2 · طابقي العبارات بالمعنى الفصيح'
+                    : 'Exercise 2 · Match Words to Fusha Arabic'}
                 </div>
                 <p className="text-xs text-slate-600">
-                  {lesson.exercises[1].prompt}
+                  {isAr
+                    ? 'اختاري العبارة على اليسار ثم معناها العربي المطابق على اليمين.'
+                    : lesson.exercises[1].prompt}
                 </p>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-2">
@@ -978,14 +1244,16 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                   </div>
                 </div>
                 <p className="text-xs text-slate-500 tabular-nums">
-                  Matched {Object.keys(ex2Matched).length}/{ex2Pairs.length}
+                  {isAr
+                    ? `تمت مطابقة ${Object.keys(ex2Matched).length}/${ex2Pairs.length}`
+                    : `Matched ${Object.keys(ex2Matched).length}/${ex2Pairs.length}`}
                 </p>
               </div>
 
               {/* Exercise 3: Sentence Order */}
               <div className="rounded-xl border border-slate-200 p-5 space-y-3">
                 <div className="text-xs font-bold text-pink-700">
-                  Exercise 3 · Sentence Ordering
+                  {isAr ? 'التمرين 3 · ترتيب الجملة' : 'Exercise 3 · Sentence Ordering'}
                 </div>
                 <p className="text-sm text-slate-700">
                   {lesson.exercises[2].prompt}
@@ -1025,13 +1293,19 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                 {exChecked && (
                   <p
                     className={`text-xs font-semibold ${
-                      ex3Built === lesson.exercises[2].answer
+                      normalizeSentence(ex3Built) ===
+                      normalizeSentence(lesson.exercises[2].answer || '')
                         ? 'text-emerald-700'
                         : 'text-rose-700'
                     }`}
                   >
-                    {ex3Built === lesson.exercises[2].answer
-                      ? 'Correct!'
+                    {normalizeSentence(ex3Built) ===
+                    normalizeSentence(lesson.exercises[2].answer || '')
+                      ? isAr
+                        ? 'إجابة صحيحة!'
+                        : 'Correct!'
+                      : isAr
+                      ? `الصحيح: "${lesson.exercises[2].answer}"`
                       : `Target: "${lesson.exercises[2].answer}"`}
                   </p>
                 )}
@@ -1041,7 +1315,7 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                 onClick={() => setExChecked(true)}
                 className="min-h-[44px] px-6 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 text-sm font-semibold text-white cursor-pointer"
               >
-                Check Exercises
+                {isAr ? 'التحقق من التمارين' : 'Check Exercises'}
               </button>
             </div>
           )}
@@ -1052,14 +1326,18 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-bold text-purple-950">
-                    Lesson Assessment (10 Questions)
+                    {isAr
+                      ? 'تقييم الدرس (10 أسئلة)'
+                      : 'Lesson Assessment (10 Questions)'}
                   </h2>
                   <p className="text-sm text-slate-600">
-                    Complete all 10 questions to receive your score /100, XP, and advance your progress bar.
+                    {isAr
+                      ? 'أجيبي عن الأسئلة العشرة للحصول على نتيجتكِ من 100 ونقاط الخبرة وتحديث شريط التقدم.'
+                      : 'Complete all 10 questions to receive your score /100, XP, and advance your progress bar.'}
                   </p>
                 </div>
                 <span className="text-xs font-bold text-purple-900 tabular-nums">
-                  {Object.keys(quizAnswers).length}/10 answered
+                  {Object.keys(quizAnswers).length}/10 {isAr ? 'مجاب' : 'answered'}
                 </span>
               </div>
 
@@ -1097,8 +1375,8 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
                 onClick={handleFinishLesson}
                 className="w-full sm:w-auto min-h-[48px] px-8 py-3 rounded-xl bg-gradient-to-r from-pink-600 to-purple-700 text-sm font-bold text-white shadow-md hover:opacity-95 cursor-pointer"
               >
-                {uiLang === 'ar'
-                  ? 'إنهاء الدرس وعرض النتيجة'
+                {isAr
+                  ? 'إنهاء الدرس وعرض النتيجة /100'
                   : 'Finish Lesson & See Score /100'}
               </button>
             </div>
@@ -1108,20 +1386,26 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
           <div className="flex items-center justify-between pt-4 border-t border-pink-100">
             <button
               disabled={stepIdx === 0}
-              onClick={() => setStepIdx((i) => Math.max(0, i - 1))}
+              onClick={() => {
+                stopSpeech();
+                setPlayingDialogue(null);
+                setStepIdx((i) => Math.max(0, i - 1));
+              }}
               className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 text-sm font-medium text-slate-700 disabled:opacity-40 cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span>Previous</span>
+              <span>{isAr ? 'السابق' : 'Previous'}</span>
             </button>
             {stepIdx < STEPS.length - 1 && (
               <button
-                onClick={() =>
-                  setStepIdx((i) => Math.min(STEPS.length - 1, i + 1))
-                }
+                onClick={() => {
+                  stopSpeech();
+                  setPlayingDialogue(null);
+                  setStepIdx((i) => Math.min(STEPS.length - 1, i + 1));
+                }}
                 className="min-h-[44px] inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-purple-900 text-sm font-semibold text-white hover:bg-purple-800 cursor-pointer"
               >
-                <span>Next Step</span>
+                <span>{isAr ? 'الخطوة التالية' : 'Next Step'}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             )}

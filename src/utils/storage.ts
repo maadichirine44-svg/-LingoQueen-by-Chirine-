@@ -6,6 +6,7 @@ import {
   LanguageMeta,
   LanguageProgress,
   LessonResult,
+  PlacementCEFR,
   UserProfile,
 } from '../types';
 
@@ -115,6 +116,7 @@ export function createEmptyProfile(name: string): UserProfile {
   const today = getTodayISO();
   return {
     name: name.trim(),
+    photoDataUrl: undefined,
     createdAt: new Date().toISOString(),
     streak: 1,
     lastActiveDate: today,
@@ -133,6 +135,9 @@ export function createEmptyProfile(name: string): UserProfile {
       xp: 0,
     },
     earnedBadges: [],
+    completedStories: [],
+    gamesXp: 0,
+    gamesPlayed: 0,
   };
 }
 
@@ -224,16 +229,134 @@ export function saveUserProfile(profile: UserProfile): void {
   }
 }
 
+export function updateUserProfileDetails(
+  profile: UserProfile,
+  changes: { name?: string; photoDataUrl?: string | null }
+): UserProfile {
+  const oldKey = PROFILE_PREFIX + normalizeUserKey(profile.name);
+  const nextName = changes.name !== undefined && changes.name.trim() ? changes.name.trim() : profile.name;
+  const nextPhoto =
+    changes.photoDataUrl === null
+      ? undefined
+      : changes.photoDataUrl !== undefined
+      ? changes.photoDataUrl
+      : profile.photoDataUrl;
+
+  const updated: UserProfile = {
+    ...profile,
+    name: nextName,
+    photoDataUrl: nextPhoto,
+  };
+
+  const newKey = PROFILE_PREFIX + normalizeUserKey(nextName);
+  try {
+    if (oldKey !== newKey) {
+      localStorage.removeItem(oldKey);
+      const existingNames = getSavedUserNames().filter(
+        (n) => normalizeUserKey(n) !== normalizeUserKey(profile.name)
+      );
+      if (!existingNames.some((n) => normalizeUserKey(n) === normalizeUserKey(nextName))) {
+        existingNames.push(nextName);
+      }
+      localStorage.setItem(USERS_INDEX_KEY, JSON.stringify(existingNames));
+      setActiveUserName(nextName);
+    }
+    localStorage.setItem(newKey, JSON.stringify(updated));
+  } catch {
+    // ignore
+  }
+  return updated;
+}
+
 export function getTotalXP(profile: UserProfile): number {
   const langXp = Object.values(profile.languages).reduce((sum, l) => sum + (l.xp || 0), 0);
   const dailyXp = Object.values(profile.dailyChallengeDates || {}).filter(Boolean).length * 100;
-  return langXp + (profile.hotelTrack?.xp || 0) + dailyXp;
+  const storiesXp = (profile.completedStories?.length || 0) * 40;
+  const gamesXp = profile.gamesXp || 0;
+  return langXp + (profile.hotelTrack?.xp || 0) + dailyXp + storiesXp + gamesXp;
+}
+
+export function getUserOverallLevel(profile: UserProfile): PlacementCEFR {
+  const xp = getTotalXP(profile);
+  const placed = profile.placementLevel;
+  if (xp >= 4500 || placed === 'C2') return 'C2';
+  if (xp >= 3000 || placed === 'C1') return 'C1';
+  if (xp >= 1800 || placed === 'B2') return 'B2';
+  if (xp >= 900 || placed === 'B1') return 'B1';
+  if (xp >= 300 || placed === 'A2') return 'A2';
+  return 'A1';
+}
+
+export function getPathRangeForLevel(level?: PlacementCEFR): {
+  startLesson: number;
+  unlockedTier: number;
+} {
+  switch (level) {
+    case 'A2':
+      return { startLesson: 11, unlockedTier: 2 };
+    case 'B1':
+      return { startLesson: 21, unlockedTier: 3 };
+    case 'B2':
+      return { startLesson: 31, unlockedTier: 4 };
+    case 'C1':
+      return { startLesson: 41, unlockedTier: 5 };
+    case 'C2':
+      return { startLesson: 46, unlockedTier: 5 };
+    case 'A1':
+    default:
+      return { startLesson: 1, unlockedTier: 1 };
+  }
+}
+
+export function getPathStats(langProgress: LanguageProgress): {
+  completedInPath: number;
+  totalInPath: number;
+  startLesson: number;
+} {
+  const startLesson = langProgress.pathStartLesson || 1;
+  const totalInPath = Math.max(1, 50 - startLesson + 1);
+  const completedSet = new Set(
+    (langProgress.completedLessons || []).filter((id) => id >= startLesson && id <= 50)
+  );
+  return {
+    completedInPath: completedSet.size,
+    totalInPath,
+    startLesson,
+  };
 }
 
 export function computeLanguageProgressPercent(langProgress: LanguageProgress): number {
-  // Strictly starts at 0%, moves ONLY with completed lessons (1..50 -> 2% each), never resets
-  const uniqueCount = Math.min(50, new Set(langProgress.completedLessons).size);
-  return Math.round((uniqueCount / 50) * 100);
+  // Strictly starts at 0%, moves ONLY with completed lessons along user's path up to 100%
+  const { completedInPath, totalInPath } = getPathStats(langProgress);
+  return Math.min(100, Math.round((completedInPath / totalInPath) * 100));
+}
+
+export function recordPlacementResult(
+  profile: UserProfile,
+  langId: LanguageId,
+  level: PlacementCEFR,
+  score: number
+): UserProfile {
+  const { startLesson, unlockedTier } = getPathRangeForLevel(level);
+  const prevLang = profile.languages[langId];
+  const updated: UserProfile = {
+    ...profile,
+    placementCompleted: true,
+    placementLanguage: langId,
+    placementLevel: level,
+    placementScore: score,
+    languages: {
+      ...profile.languages,
+      [langId]: {
+        ...prevLang,
+        placementLevel: level,
+        pathStartLesson: startLesson,
+        unlockedTier: Math.max(prevLang.unlockedTier || 1, unlockedTier),
+      },
+    },
+  };
+  saveUserProfile(updated);
+  return updated;
 }
 
 export function evaluateMilestoneBadges(profile: UserProfile): {
@@ -373,4 +496,33 @@ export function recordFinalExamResult(
   const { updated, newlyEarned } = evaluateMilestoneBadges(draft);
   saveUserProfile(updated);
   return { updated, newlyEarnedBadges: [...newlyEarnedGolden, ...newlyEarned] };
+}
+
+export function recordStoryCompletion(
+  profile: UserProfile,
+  storyId: string
+): { updated: UserProfile; newlyEarnedBadges: string[] } {
+  const prev = new Set(profile.completedStories || []);
+  prev.add(storyId);
+  const draft: UserProfile = {
+    ...profile,
+    completedStories: Array.from(prev),
+  };
+  const { updated, newlyEarned } = evaluateMilestoneBadges(draft);
+  saveUserProfile(updated);
+  return { updated, newlyEarnedBadges: newlyEarned };
+}
+
+export function recordGameXP(
+  profile: UserProfile,
+  earnedXp: number
+): { updated: UserProfile; newlyEarnedBadges: string[] } {
+  const draft: UserProfile = {
+    ...profile,
+    gamesXp: (profile.gamesXp || 0) + Math.max(0, earnedXp),
+    gamesPlayed: (profile.gamesPlayed || 0) + 1,
+  };
+  const { updated, newlyEarned } = evaluateMilestoneBadges(draft);
+  saveUserProfile(updated);
+  return { updated, newlyEarnedBadges: newlyEarned };
 }
